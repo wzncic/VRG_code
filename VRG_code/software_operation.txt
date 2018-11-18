@@ -1,0 +1,31 @@
+#VarScan:
+samtools sort -o HG002_sort.bam -T sorted -@ 35 151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam
+samtools sort -o HG003_sort.bam -T sorted -@ 35 151002_7001448_0359_AC7F6GANXX_Sample_HG003-EEogPU_v02-KIT-Av5_TCTTCACA_L008.posiSrt.markDup.bam
+samtools sort -o HG004_sort.bam -T sorted -@ 35 151002_7001448_0359_AC7F6GANXX_Sample_HG004-EEogPU_v02-KIT-Av5_CCGAAGTA_L008.posiSrt.markDup.bam
+samtools mpileup -B -q 1 -f hs37d5.fa HG003_sort.bam HG004_sort.bam HG002_sort.bam >trio.mpileup
+java -jar VarScan.v2.3.9.jar trio trio.mpileup trio.mpileup.output --min-coverage 10 --min-var-freq 0.20 --p-value 0.05 -adj-var-freq 0.05 -adj-p-value 0.15
+
+
+#RTG:
+rtg format -o hs37d5 hs37d5.fa
+rtg calibrate -t hs37d5 151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam
+rtg calibrate -t hs37d5 151002_7001448_0359_AC7F6GANXX_Sample_HG003-EEogPU_v02-KIT-Av5_TCTTCACA_L008.posiSrt.markDup.bam
+rtg calibrate -t hs37d5 151002_7001448_0359_AC7F6GANXX_Sample_HG004-EEogPU_v02-KIT-Av5_CCGAAGTA_L008.posiSrt.markDup.bam
+find . -name "*.bam" > map_trio-bam-files
+rtg family -t hs37d5 -o trio_variants -p family_new.ped -I map_trio-bam-files --avr-model=illumina-exome.avr --snps-only
+rtg vcffilter --keep-expr "'Sample_Diag-excap51-HG002-EEogPU'.DN=='Y'" -i trio_variants/snps.vcf.gz -o snps.output.vcf.gz
+
+
+#GATK:
+samtools faidx hs37d5.fa
+java -jar picard.jar CreateSequenceDictionary R=hs37d5.fa O=hs37d5.dict
+gatk HaplotypeCaller -R hs37d5.fa -I 151002_7001448_0359_AC7F6GANXX_Sample_HG002-EEogPU_v02-KIT-Av5_AGATGTAC_L008.posiSrt.markDup.bam -O Sample_HG002-EEogPU.output.g.vcf.gz -ERC GVCF
+gatk HaplotypeCaller -R hs37d5.fa -I 151002_7001448_0359_AC7F6GANXX_Sample_HG003-EEogPU_v02-KIT-Av5_TCTTCACA_L008.posiSrt.markDup.bam -O Sample_HG003-EEogPU.output.g.vcf.gz -ERC GVCF
+gatk HaplotypeCaller -R hs37d5.fa -I 151002_7001448_0359_AC7F6GANXX_Sample_HG004-EEogPU_v02-KIT-Av5_CCGAAGTA_L008.posiSrt.markDup.bam -O Sample_HG004-EEogPU.output.g.vcf.gz -ERC GVCF
+gatk CombineGVCFs -R hs37d5.fa --variant Sample_HG002-EEogPU.output.g.vcf.gz --variant Sample_HG003-EEogPU.output.g.vcf.gz --variant Sample_HG004-EEogPU.output.g.vcf.gz -O cohort.g.vcf.gz
+gatk GenotypeGVCFs -R hs37d5.fa -V cohort.g.vcf.gz -O cohort.vcf.gz
+gatk VariantRecalibrator -R hs37d5.fa -V cohort.vcf.gz --resource hapmap,known=false,training=true,truth=true,prior=15.0:hapmap_3.3.b37.vcf.gz --resource omni,known=false,training=true,truth=false,prior=12.0:1000G_omni2.5.b37.vcf.gz --resource 1000G,known=false,training=true,truth=false,prior=10.0:1000G_phase1.snps.high_confidence.b37.vcf.gz --resource dbsnp,known=true,training=false,truth=false,prior=2.0:dbsnp_138.b37.vcf.gz -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR -mode SNP -O output.recal --tranches-file output.tranches
+gatk ApplyVQSR -R hs37d5.fa -V cohort.vcf.gz -O output.vcf.gz --truth-sensitivity-filter-level 99.0 --tranches-file output.tranches --recal-file output.recal -mode SNP
+gatk CalculateGenotypePosteriors -R hs37d5.fa -supporting 1000G_phase3_v4_20130502.sites.vcf.gz -ped family_new.ped -V output.vcf.gz -O output.postCGP.vcf.gz
+gatk VariantFiltration -R hs37d5.fa -V output.postCGP.vcf.gz -G-filter "GQ < 20.0" -G-filter-name lowGQ -O output.postCGP.Gfiltered.vcf.gz
+java -jar GenomeAnalysisTK.jar -T VariantAnnotator -R hs37d5.fa -V output.postCGP.Gfiltered.vcf.gz -A PossibleDeNovo -ped family_new.ped -o output.postCGP.Gfiltered.deNovos.vcf.gz
